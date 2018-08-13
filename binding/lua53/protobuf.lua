@@ -1,4 +1,5 @@
 local c = require "protobuf.c"
+local skynet = require "skynet"
 
 local setmetatable = setmetatable
 local type = type
@@ -38,7 +39,14 @@ local decode_type_cache = {}
 local _R_meta = {}
 
 function _R_meta:__index(key)
-	local v = decode_type_cache[self._CType][key](self, key)
+	local v = nil
+	xpcall(function ()
+		v = decode_type_cache[self._CType][key](self, key)
+	end,
+	function (err)
+		skynet.error(err)
+		skynet.error(debug.traceback())
+	end)
 	self[key] = v
 	return v
 end
@@ -319,19 +327,26 @@ setmetatable(encode_type_cache , {
 })
 
 function M.encode( message, t , func , ...)
+	local args = ...
 	local encoder = c._wmessage_new(P, message)
 	assert(encoder ,  message)
-	encode_message(encoder, message, t)
-	if func then
-		local buffer, len = c._wmessage_buffer(encoder)
-		local ret = func(buffer, len, ...)
-		c._wmessage_delete(encoder)
-		return ret
-	else
-		local s = c._wmessage_buffer_string(encoder)
-		c._wmessage_delete(encoder)
-		return s
-	end
+	local ret = nil
+	xpcall(function ()
+		encode_message(encoder, message, t)
+		if func then
+			local buffer, len = c._wmessage_buffer(encoder)
+			ret = func(buffer, len, args)
+			c._wmessage_delete(encoder)
+		else
+			ret = c._wmessage_buffer_string(encoder)
+			c._wmessage_delete(encoder)
+		end
+	end,
+	function(err)
+		skynet.error(err)
+		skynet.error(debug.traceback())
+	end)
+	return ret
 end
 
 --------- unpack ----------
@@ -453,7 +468,14 @@ end
 
 function M.decode(typename, buffer, length)
 	local ret = {}
-	local ok = c._decode(P, decode_message_cb , ret , typename, buffer, length)
+	local ok = nil
+	xpcall(function ()
+		ok = c._decode(P, decode_message_cb , ret , typename, buffer, length)
+	end,
+	function(err)
+		skynet.error(err)
+		skynet.error(debug.traceback())
+	end)
 	if ok then
 		return setmetatable(ret , default_table(typename))
 	else
